@@ -14,15 +14,13 @@ import java.util.ArrayList;
 
 public class JavaGraphManager {
 
-    public Node buildFileGraph(CompilationUnit compilationUnit) {
+    public Node[] buildFileGraph(CompilationUnit compilationUnit) {
         Node fileStartNode = new Node(NodeType.FILE_START);
         Node tail = fileStartNode;
 
-        // In Java, the "body" of a file is its list of types (classes)
-        // We pass the list of types to processBlock
         tail = processBlock(compilationUnit.getChildNodes(), tail);
 
-        return fileStartNode;
+        return new Node[] {fileStartNode, tail};
     }
 
     public Node[] buildFunctionGraph(MethodDeclaration methodDeclaration) {
@@ -46,31 +44,24 @@ public class JavaGraphManager {
     public Node processBlock(List<com.github.javaparser.ast.Node> nodes, Node currentTail) {
         for (com.github.javaparser.ast.Node node : nodes) {
             int line = node.getBegin().map(p -> p.line).orElse(0);
-
-            if (node instanceof MethodDeclaration method) {
-                // 1. Create FUNCTION_DEF node (the signature line)
+            if (node instanceof IfStmt ifStmt) {
+                currentTail = handleIfStructure(ifStmt, currentTail);
+            } else if (node instanceof MethodDeclaration method) {
                 Node defNode = new Node(NodeType.FUNCTION_DEF, line);
                 currentTail.addNeighbor(defNode);
 
-                // 2. Build internal graph
                 Node[] result = buildFunctionGraph(method);
                 Node innerStart = result[0];
                 Node innerExit = result[1];
 
-                // 3. Link def to body start
                 defNode.addNeighbor(innerStart);
 
-                // 4. Update tail to the end of the function body
                 currentTail = innerExit;
-            } 
-            else if (node instanceof ClassOrInterfaceDeclaration classDec) {
-                // EXPLICITLY grab the members (methods, fields) of the class
-                List<com.github.javaparser.ast.Node> members = new ArrayList<>(classDec.getMembers());
-                currentTail = processBlock(members, currentTail);
-            }
-            else if (node instanceof IfStmt ifStmt) {
-                currentTail = handleIfStructure(ifStmt, currentTail);
-            } else if (node instanceof Statement || node instanceof ExpressionStmt || node instanceof FieldDeclaration) {
+            } else if (node instanceof ClassOrInterfaceDeclaration classDecl) {
+                Node classNode = new Node(NodeType.CLASS, line);
+                currentTail.addNeighbor(classNode);
+                currentTail = processBlock(new ArrayList<>(classDecl.getMembers()), classNode);
+            } else {
                 Node newNode = new Node(NodeType.STATEMENT, line);
                 currentTail.addNeighbor(newNode);
                 currentTail = newNode;
@@ -85,45 +76,37 @@ public class JavaGraphManager {
 
         Node joinNode = new Node(NodeType.JOIN, endLine);
 
-        // 1. Process the IF branch
         Node ifNode = new Node(NodeType.IF, line);
         branchParent.addNeighbor(ifNode);
 
         Node ifBodyTail = processBlock(getStatementAsList(ifStmt.getThenStmt()), ifNode);
         ifBodyTail.addNeighbor(joinNode);
 
-        // 2. Process ELIFs and ELSE
         IfStmt currIf = ifStmt;
         while (currIf.getElseStmt().isPresent()) {
             Statement elseStmt = currIf.getElseStmt().get();
 
             if (elseStmt instanceof IfStmt elifStmt) {
-                // It's an ELSE IF
                 Node elifNode = new Node(NodeType.ELSE_IF, elifStmt.getBegin().map(p -> p.line).orElse(0));
-                
-                // Link ELIF directly to the same branch_parent for "menu" view
+
                 branchParent.addNeighbor(elifNode);
 
                 Node elifBodyTail = processBlock(getStatementAsList(elifStmt.getThenStmt()), elifNode);
                 elifBodyTail.addNeighbor(joinNode);
 
-                currIf = elifStmt; // Continue down the chain
+                currIf = elifStmt;
             } else {
-                // It's a final ELSE
                 Node elseNode = new Node(NodeType.ELSE, elseStmt.getBegin().map(p -> p.line).orElse(0));
                 branchParent.addNeighbor(elseNode);
 
                 Node elseBodyTail = processBlock(getStatementAsList(elseStmt), elseNode);
                 elseBodyTail.addNeighbor(joinNode);
-                
-                // Break the loop since we reached the final else
+
                 currIf = null; 
                 break;
             }
         }
 
-        // If there's no else/elif at the end of the chain, 
-        // the branch parent also points directly to the join
         if (currIf != null && currIf.getElseStmt().isEmpty()) {
             branchParent.addNeighbor(joinNode);
         }

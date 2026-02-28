@@ -5,6 +5,8 @@ public class Example {
         if (count > 0) {
             // An IfStmt to test your conditional detection
             System.out.println("Hello World " + count + " times!");
+        } else if (count == 0) {
+            System.out.println("");
         } else {
             System.out.println("No greetings today.");
         }

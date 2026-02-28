@@ -22,7 +22,8 @@ public class Main {
             CompilationUnit cu = StaticJavaParser.parse(content);
 
             // 2. Build the graph starting from the file level
-            Node startNode = javaGraphManager.buildFileGraph(cu);
+            Node[] fileGraphNode = javaGraphManager.buildFileGraph(cu);
+            Node startNode = fileGraphNode[0];
 
             // 3. Print the result to verify
             System.out.println("\n--- MindReader Graph Structure ---");
