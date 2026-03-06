@@ -330,6 +330,62 @@ class JavaGraphManagerTest {
         assertFalse(functionStart.getNeighbors().isEmpty());
     }
 
+    @Test
+    void testGraphDiff() {
+        // Version 1: if without else
+        String codeV1 = """
+            public class TestClass {
+                public void f(boolean x) {
+                    if (x) {
+                        int y = 1;
+                    }
+                }
+            }
+            """;
+
+        // Version 2: if with else
+        String codeV2 = """
+            public class TestClass {
+                public void f(boolean x) {
+                    if (x) {
+                        int y = 1;
+                    } else {
+                        int z = 2;
+                    }
+                }
+            }
+            """;
+
+        CompilationUnit cu1 = parser.parse(codeV1).getResult().orElseThrow();
+        CompilationUnit cu2 = parser.parse(codeV2).getResult().orElseThrow();
+
+        MethodDeclaration method1 = cu1.findFirst(MethodDeclaration.class).orElseThrow();
+        MethodDeclaration method2 = cu2.findFirst(MethodDeclaration.class).orElseThrow();
+
+        Node[] result1 = graphManager.buildFunctionGraph(method1);
+        Node[] result2 = graphManager.buildFunctionGraph(method2);
+
+        Node g1 = result1[0];
+        Node g2 = result2[0];
+
+        graphManager.displayAllPaths(g1);
+        graphManager.displayAllPaths(g2);
+
+        // This will output exactly one added path (the else branch)
+        // and one removed path (the original if-only flow).
+        // Note: diffGraphs prints to console, so this test verifies it runs without errors
+        assertDoesNotThrow(() -> graphManager.diffGraphs(g1, g2));
+
+        // Verify g2 has an ELSE node that g1 doesn't have
+        boolean g1HasElse = hasNodeTypeInGraph(g1, NodeType.ELSE);
+        boolean g2HasElse = hasNodeTypeInGraph(g2, NodeType.ELSE);
+
+
+
+        assertFalse(g1HasElse, "Version 1 should not have ELSE node");
+        assertTrue(g2HasElse, "Version 2 should have ELSE node");
+    }
+
     // Helper method to check if a node type exists in the graph
     private boolean hasNodeTypeInGraph(Node start, NodeType type) {
         if (start.getNodeType() == type) {
@@ -341,5 +397,34 @@ class JavaGraphManagerTest {
             }
         }
         return false;
+    }
+
+    // Helper method to count paths in graph
+    private int countPaths(Node start) {
+        java.util.Set<java.util.List<NodeType>> paths = new java.util.HashSet<>();
+        countPathsRecursive(start, new java.util.ArrayList<>(), paths, new java.util.HashSet<>());
+        return paths.size();
+    }
+
+    private void countPathsRecursive(Node current, java.util.List<NodeType> currentPath,
+                                      java.util.Set<java.util.List<NodeType>> allPaths,
+                                      java.util.Set<Node> visited) {
+        if (visited.contains(current)) {
+            return;
+        }
+
+        currentPath.add(current.getNodeType());
+
+        if (current.getNeighbors().isEmpty()) {
+            allPaths.add(new java.util.ArrayList<>(currentPath));
+        } else {
+            visited.add(current);
+            for (Node neighbor : current.getNeighbors()) {
+                countPathsRecursive(neighbor, currentPath, allPaths, visited);
+            }
+            visited.remove(current);
+        }
+
+        currentPath.remove(currentPath.size() - 1);
     }
 }

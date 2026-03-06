@@ -9,8 +9,12 @@ import com.github.javaparser.ast.stmt.Statement;
 //import com.github.javaparser.ast.body.FieldDeclaration;
 import com.mindreader.utils.Node;
 import com.mindreader.utils.NodeType;
+
+import java.util.HashSet;
 import java.util.List;
 import java.util.ArrayList;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 public class JavaGraphManager {
 
@@ -121,5 +125,110 @@ public class JavaGraphManager {
         List<com.github.javaparser.ast.Node> list = new ArrayList<>();
         list.add(stmt);
         return list;
+    }
+
+    /**
+     * Explores the graph to find and display all unique execution sequences.
+     * Equivalent to Python's display_all_paths.
+     */
+    public void displayAllPaths(Node startNode) {
+        List<List<Node>> allPaths = new ArrayList<>();
+        findPathsRecursive(startNode, new ArrayList<>(), allPaths);
+
+        _printFormattedPaths(allPaths);
+    }
+
+    private void findPathsRecursive(Node currentNode, List<Node> currentPath, List<List<Node>> allPaths) {
+        List<Node> newPath = new ArrayList<>(currentPath);
+        newPath.add(currentNode);
+
+        List<Node> neighbors = currentNode.getNeighbors();
+
+        // If no neighbors, we've reached the end of an execution string
+        if (neighbors == null || neighbors.isEmpty()) {
+            allPaths.add(newPath);
+            return;
+        }
+
+        for (Node neighbor : neighbors) {
+            // Basic cycle detection: if neighbor is already in path, mark as loop and stop
+            if (currentPath.contains(neighbor)) {
+                List<Node> loopPath = new ArrayList<>(newPath);
+                loopPath.add(neighbor);
+                allPaths.add(loopPath);
+                continue;
+            }
+            findPathsRecursive(neighbor, newPath, allPaths);
+        }
+    }
+
+    private void _printFormattedPaths(List<List<Node>> paths) {
+        System.out.println("\n--- Project Mindreader: Execution Paths Found (" + paths.size() + ") ---");
+        for (int i = 0; i < paths.size(); i++) {
+            System.out.println("\nPath " + (i + 1) + ":");
+            String pathStr = paths.get(i).stream()
+                    .map(node -> "[L" + node.getLineNumber() + ": " + node.getNodeType().name() + "]")
+                    .collect(Collectors.joining(" -> "));
+            System.out.println("  " + pathStr);
+        }
+    }
+
+    public Set<String> getPathSignatures(Node startNode) {
+        List<String> allPaths = new ArrayList<>();
+        findSignaturesRecursive(startNode, new ArrayList<>(), allPaths);
+        return new HashSet<>(allPaths);
+    }
+
+    private void findSignaturesRecursive(Node currentNode, List<String> currentPath, List<String> allPaths) {
+        String nodeSig = "L" + currentNode.getLineNumber() + ":" + currentNode.getNodeType().name();
+        List<String> newPath = new ArrayList<>(currentPath);
+        newPath.add(nodeSig);
+
+        List<Node> neighbors = currentNode.getNeighbors();
+        if (neighbors == null || neighbors.isEmpty()) {
+            allPaths.add(String.join(" -> ", newPath));
+            return;
+        }
+
+        for (Node neighbor : neighbors) {
+            String neighborSig = "L" + neighbor.getLineNumber() + ":" + neighbor.getNodeType().name();
+            if (currentPath.contains(neighborSig)) {
+                List<String> loopPath = new ArrayList<>(newPath);
+                loopPath.add("LOOP_DETECTED");
+                allPaths.add(String.join(" -> ", loopPath));
+                continue;
+            }
+            findSignaturesRecursive(neighbor, newPath, allPaths);
+        }
+    }
+
+    public void diffGraphs(Node oldStartNode, Node newStartNode) {
+        Set<String> oldPaths = getPathSignatures(oldStartNode);
+        Set<String> newPaths = getPathSignatures(newStartNode);
+
+        // Added: In new but not in old
+        Set<String> added = new HashSet<>(newPaths);
+        added.removeAll(oldPaths);
+
+        // Removed: In old but not in new
+        Set<String> removed = new HashSet<>(oldPaths);
+        removed.removeAll(newPaths);
+
+        System.out.println("\n--- Project Mindreader: Logic Diff ---");
+
+        if (added.isEmpty() && removed.isEmpty()) {
+            System.out.println("No changes in execution logic detected.");
+            return;
+        }
+
+        if (!removed.isEmpty()) {
+            System.out.println("\n[REMOVED PATHS]: " + removed.size());
+            removed.forEach(path -> System.out.println("  - " + path));
+        }
+
+        if (!added.isEmpty()) {
+            System.out.println("\n[ADDED PATHS]: " + added.size());
+            added.forEach(path -> System.out.println("  + " + path));
+        }
     }
 }
