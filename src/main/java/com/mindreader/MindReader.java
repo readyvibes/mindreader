@@ -5,7 +5,6 @@ import com.github.javaparser.ast.CompilationUnit;
 import com.mindreader.graph.JavaGraphManager;
 import com.mindreader.utils.Node;
 
-import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
