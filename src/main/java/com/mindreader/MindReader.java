@@ -25,6 +25,7 @@ public class MindReader {
         directory = directory;
         enableGit = enableGit;
         getRepoFileData();
+        getRepoFileMethodCalls();
     }
 
     private static CompilationUnit astParseFile(String filePath) {
@@ -88,7 +89,7 @@ public class MindReader {
         }
     }
 
-    private static List<Path> findJavaFiles() throws IOException {
+    private static List<Path> findJavaFiles() {
         Path start = Paths.get(directory);
 
         // Files.walk visits all files and directories recursively
