@@ -14,5 +14,6 @@ public enum NodeType {
     JOIN,
     CLASS,
     FUNCTION_START,
-    METHOD
+    METHOD,
+    METHOD_CALL
 }

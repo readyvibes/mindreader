@@ -10,6 +10,8 @@ import java.util.List;
 public class Node {
     private NodeType type;
     private int lineNumber;
+    private String targetMethodName;
+    private String targetFilePath;
     private final List<Node> neighbors;
 
     // Default constructor initialized with UNKNOWN type
@@ -59,5 +61,21 @@ public class Node {
 
     public List<Node> getNeighbors() {
         return neighbors;
+    }
+
+    public String getTargetMethodName() {
+        return targetMethodName;
+    }
+
+    public void setTargetMethodName(String targetMethodName) {
+        this.targetMethodName = targetMethodName;
+    }
+
+    public String getTargetFilePath() {
+        return targetFilePath;
+    }
+
+    public void setTargetFilePath(String targetFilePath) {
+        this.targetFilePath = targetFilePath;
     }
 }

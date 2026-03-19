@@ -8,6 +8,11 @@ import com.mindreader.utils.NodeType;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
+import java.util.ArrayList;
+import java.util.Set;
+import java.util.HashSet;
+
 import static org.junit.jupiter.api.Assertions.*;
 
 class JavaGraphManagerTest {
@@ -426,5 +431,185 @@ class JavaGraphManagerTest {
         }
 
         currentPath.remove(currentPath.size() - 1);
+    }
+
+    @Test
+    void testMethodCallDetection() {
+        String code = """
+            public class Operation {
+                public int operate(int x) {
+                    int result = add(x, 5);
+                    return result;
+                }
+            }
+            """;
+
+        CompilationUnit cu = parser.parse(code).getResult().orElseThrow();
+        MethodDeclaration method = cu.findFirst(MethodDeclaration.class).orElseThrow();
+
+        Node[] result = graphManager.buildFunctionGraph(method);
+        Node functionStart = result[0];
+
+        // Should find a METHOD_CALL node for "add"
+        boolean hasMethodCallNode = hasNodeTypeInGraph(functionStart, NodeType.METHOD_CALL);
+        assertTrue(hasMethodCallNode, "Graph should contain a METHOD_CALL node");
+
+        // Verify the method call is for "add"
+        Node methodCallNode = findNodeByType(functionStart, NodeType.METHOD_CALL);
+        assertNotNull(methodCallNode);
+        assertEquals("add", methodCallNode.getTargetMethodName());
+    }
+
+    @Test
+    void testGraphConcatenation() {
+        // Operation.java - operate() method that calls add()
+        String operateCode = """
+            public class Operation {
+                public int operate(int x, int y) {
+                    int result = add(x, y);
+                    System.out.println("Done");
+                    return result;
+                }
+            }
+            """;
+
+        // Add.java - add() method
+        String addCode = """
+            public class Add {
+                public int add(int a, int b) {
+                    int sum = a + b;
+                    return sum;
+                }
+            }
+            """;
+
+        // Parse and build graphs
+        CompilationUnit operateCu = parser.parse(operateCode).getResult().orElseThrow();
+        CompilationUnit addCu = parser.parse(addCode).getResult().orElseThrow();
+
+        MethodDeclaration operateMethod = operateCu.findFirst(MethodDeclaration.class).orElseThrow();
+        MethodDeclaration addMethod = addCu.findFirst(MethodDeclaration.class).orElseThrow();
+
+        Node[] operateGraph = graphManager.buildFunctionGraph(operateMethod);
+        Node[] addGraph = graphManager.buildFunctionGraph(addMethod);
+
+        Node operateStart = operateGraph[0];
+        Node operateExit = operateGraph[1];
+        Node addStart = addGraph[0];
+        Node addExit = addGraph[1];
+
+        // Set file paths for nodes (simulating real file scenario)
+        setFilePathForGraph(operateStart, "Operation.java");
+        setFilePathForGraph(addStart, "Add.java");
+
+        // Display path before concatenation
+        System.out.println("\n=== Before Concatenation ===");
+        graphManager.displayAllPaths(operateStart);
+
+        // Concatenate the graphs
+        boolean success = graphManager.concatenateGraphs(operateStart, "add", addStart, addExit);
+        assertTrue(success, "Graph concatenation should succeed");
+
+        // Display path after concatenation
+        System.out.println("\n=== After Concatenation ===");
+        graphManager.displayAllPaths(operateStart);
+
+        // Verify the structure: operate_start -> ... -> METHOD_CALL -> add_start -> add_body -> add_exit -> remaining_operate_statements
+
+        // 1. Find the METHOD_CALL node
+        Node methodCallNode = findNodeByType(operateStart, NodeType.METHOD_CALL);
+        assertNotNull(methodCallNode, "Should find METHOD_CALL node");
+        assertEquals("add", methodCallNode.getTargetMethodName());
+
+        // 2. METHOD_CALL should point to add's FUNCTION_START
+        assertEquals(1, methodCallNode.getNeighbors().size(),
+            "METHOD_CALL should have exactly one neighbor (add's FUNCTION_START)");
+        Node nextAfterCall = methodCallNode.getNeighbors().get(0);
+        assertEquals(NodeType.FUNCTION_START, nextAfterCall.getNodeType(),
+            "METHOD_CALL should connect to add's FUNCTION_START");
+
+        // 3. add's exit should connect back to the remaining operate statements
+        assertTrue(addExit.getNeighbors().size() > 0,
+            "add's exit should connect to remaining operate statements");
+
+        // 4. Verify that something comes after add completes (println is a METHOD_CALL in this case)
+        boolean foundNodesAfterAdd = false;
+        for (Node neighbor : addExit.getNeighbors()) {
+            if (neighbor.getNodeType() == NodeType.METHOD_CALL || neighbor.getNodeType() == NodeType.STATEMENT) {
+                foundNodesAfterAdd = true;
+                break;
+            }
+        }
+        assertTrue(foundNodesAfterAdd,
+            "Should find operate's remaining nodes after add's exit");
+
+        // 5. Verify the complete path includes all expected node types
+        List<NodeType> pathTypes = collectPathTypes(operateStart);
+        assertTrue(pathTypes.contains(NodeType.FUNCTION_START), "Should have operate's FUNCTION_START");
+        assertTrue(pathTypes.contains(NodeType.METHOD_CALL), "Should have METHOD_CALL");
+        assertTrue(pathTypes.contains(NodeType.STATEMENT), "Should have statements");
+
+        System.out.println("\n✓ Graph concatenation successful!");
+        System.out.println("✓ Path: operate_start -> statements -> METHOD_CALL(add) -> add_start -> add_body -> add_exit -> remaining_operate_statements");
+
+        // NEW: Concatenate file content based on graph
+        System.out.println("\n=== Concatenated File Content ===");
+        String concatenatedContent = graphManager.concatenateFileContent(operateStart, addStart);
+        System.out.println(concatenatedContent);
+
+        // Verify the concatenated content is generated (even if files don't exist on disk in test)
+        assertNotNull(concatenatedContent, "Should generate concatenated content");
+    }
+
+    // Helper method to find a node by type
+    private Node findNodeByType(Node start, NodeType type) {
+        if (start.getNodeType() == type) {
+            return start;
+        }
+        for (Node neighbor : start.getNeighbors()) {
+            Node found = findNodeByType(neighbor, type);
+            if (found != null) {
+                return found;
+            }
+        }
+        return null;
+    }
+
+    // Helper method to collect all node types in a graph
+    private List<NodeType> collectPathTypes(Node start) {
+        List<NodeType> types = new ArrayList<>();
+        Set<Node> visited = new HashSet<>();
+        collectPathTypesRecursive(start, types, visited);
+        return types;
+    }
+
+    private void collectPathTypesRecursive(Node current, List<NodeType> types, Set<Node> visited) {
+        if (current == null || visited.contains(current)) {
+            return;
+        }
+        visited.add(current);
+        types.add(current.getNodeType());
+
+        for (Node neighbor : current.getNeighbors()) {
+            collectPathTypesRecursive(neighbor, types, visited);
+        }
+    }
+
+    // Helper method to set file path for all nodes in a graph
+    private void setFilePathForGraph(Node start, String filePath) {
+        Set<Node> visited = new HashSet<>();
+        setFilePathRecursive(start, filePath, visited);
+    }
+
+    private void setFilePathRecursive(Node current, String filePath, Set<Node> visited) {
+        if (current == null || visited.contains(current)) {
+            return;
+        }
+        visited.add(current);
+        current.setTargetFilePath(filePath);
+
+        for (Node neighbor : current.getNeighbors()) {
+            setFilePathRecursive(neighbor, filePath, visited);
+        }
     }
 }
