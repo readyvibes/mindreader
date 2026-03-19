@@ -343,33 +343,61 @@ public class JavaGraphManager {
         List<Node> executionPath = new ArrayList<>();
         Set<Node> visited = new HashSet<>();
 
-        // Collect the primary path from the first graph
+        // Follow the execution flow
         collectExecutionPath(graph1Start, executionPath, visited);
 
-        // If the second graph was not reachable from the first (not linked), append it
-        if (graph2Start != null && !visited.contains(graph2Start)) {
-            collectExecutionPath(graph2Start, executionPath, visited);
-        }
+        // Track file contexts: stores (filePath, internalIndentLevel)
+        Deque<FileContext> contextStack = new ArrayDeque<>();
+        String currentFile = null;
+        int currentInternalIndent = 0;
 
-        int currentIndent = 0;
         for (Node node : executionPath) {
-            String sourceLine = readSourceLine(node.getTargetFilePath(), node.getLineNumber());
+            String nodeFile = node.getTargetFilePath();
+            if (nodeFile == null) continue;
 
-            if (sourceLine != null && !sourceLine.trim().isEmpty()) {
-                // Adjust indentation for blocks/methods
-                if (node.getNodeType() == NodeType.JOIN) {
-                    currentIndent = Math.max(0, currentIndent - 1);
+            // Handle File Transitions (Inlining/Returning)
+            if (currentFile != null && !nodeFile.equals(currentFile)) {
+                boolean isReturning = false;
+
+                // Check if we are returning to a file already in our call stack
+                while (!contextStack.isEmpty()) {
+                    if (contextStack.peek().filePath.equals(nodeFile)) {
+                        FileContext restored = contextStack.pop();
+                        currentInternalIndent = restored.savedIndent;
+                        isReturning = true;
+                        break;
+                    }
+                    contextStack.pop(); // Discard intermediate contexts if necessary
                 }
 
-                concatenated.append("    ".repeat(currentIndent))
+                if (!isReturning) {
+                    // Entering a new file/method call: save current context and start fresh internal indent
+                    contextStack.push(new FileContext(currentFile, currentInternalIndent));
+                    currentInternalIndent = 0;
+                }
+            }
+            currentFile = nodeFile;
+
+            String sourceLine = readSourceLine(nodeFile, node.getLineNumber());
+            if (sourceLine != null && !sourceLine.trim().isEmpty()) {
+
+                // 1. Decrement indent BEFORE printing if we are exiting a block
+                if (node.getNodeType() == NodeType.JOIN) {
+                    currentInternalIndent = Math.max(0, currentInternalIndent - 1);
+                }
+
+                // 2. Calculate Total Indent: Call Stack Depth + Internal File Indent
+                int totalIndent = contextStack.size() + currentInternalIndent;
+
+                concatenated.append("    ".repeat(totalIndent))
                         .append(sourceLine.trim())
                         .append("\n");
 
-                // Increase indentation after entering a block or function
+                // 3. Increment indent AFTER printing if we are entering a block or function
                 if (node.getNodeType() == NodeType.FUNCTION_START ||
                         node.getNodeType() == NodeType.CLASS ||
                         node.getNodeType() == NodeType.IF) {
-                    currentIndent++;
+                    currentInternalIndent++;
                 }
             }
         }
@@ -381,9 +409,7 @@ public class JavaGraphManager {
      * Collects the first execution path through a graph.
      */
     private void collectExecutionPath(Node current, List<Node> path, Set<Node> visited) {
-        if (current == null || visited.contains(current)) {
-            return;
-        }
+        if (current == null || visited.contains(current)) return;
         visited.add(current);
         path.add(current);
 
@@ -413,27 +439,30 @@ public class JavaGraphManager {
      * Returns null if the file cannot be read or line doesn't exist.
      */
     private String readSourceLine(String filePath, int lineNumber) {
-        // Check cache first (for tests or memory-based processing)
+        // Check cache first (for memory-based testing)
         if (fileContentCache.containsKey(filePath)) {
             List<String> lines = fileContentCache.get(filePath);
-            if (lineNumber > 0 && lineNumber <= lines.size()) {
-                return lines.get(lineNumber - 1);
-            }
-            return null;
+            return (lineNumber > 0 && lineNumber <= lines.size()) ? lines.get(lineNumber - 1) : null;
         }
 
         // Fallback to disk
         try {
             java.nio.file.Path path = java.nio.file.Paths.get(filePath);
             if (!java.nio.file.Files.exists(path)) return null;
-
             List<String> lines = java.nio.file.Files.readAllLines(path);
-            if (lineNumber > 0 && lineNumber <= lines.size()) {
-                return lines.get(lineNumber - 1);
-            }
+            return (lineNumber > 0 && lineNumber <= lines.size()) ? lines.get(lineNumber - 1) : null;
         } catch (Exception e) {
             return null;
         }
-        return null;
+    }
+
+    private static class FileContext {
+        final String filePath;
+        final int savedIndent;
+
+        FileContext(String filePath, int savedIndent) {
+            this.filePath = filePath;
+            this.savedIndent = savedIndent;
+        }
     }
 }
