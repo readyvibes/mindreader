@@ -12,13 +12,18 @@ import com.github.javaparser.ast.visitor.VoidVisitorAdapter;
 import com.mindreader.utils.Node;
 import com.mindreader.utils.NodeType;
 
-import java.util.HashSet;
-import java.util.List;
-import java.util.ArrayList;
-import java.util.Set;
+import java.util.*;
 import java.util.stream.Collectors;
 
 public class JavaGraphManager {
+
+    private final Map<String, List<String>> fileContentCache = new HashMap<>();
+
+    public void putFileContent(String filePath, String content) {
+        if (content != null) {
+            fileContentCache.put(filePath, Arrays.asList(content.split("\\r?\\n")));
+        }
+    }
 
     public Node[] buildFileGraph(CompilationUnit compilationUnit) {
         Node fileStartNode = new Node(NodeType.FILE_START);
@@ -32,13 +37,13 @@ public class JavaGraphManager {
     public Node[] buildFunctionGraph(MethodDeclaration methodDeclaration) {
         int line = methodDeclaration.getBegin().map(p -> p.line).orElse(0);
         Node functionStartNode = new Node(NodeType.FUNCTION_START, line);
-        
+
         Node tail = functionStartNode;
 
         // Get the statements from the method body and process them
         if (methodDeclaration.getBody().isPresent()) {
             List<Statement> statements = methodDeclaration.getBody().get().getStatements();
-            
+
             // Create a generic Node list to pass to processBlock
             List<com.github.javaparser.ast.Node> genericNodes = new ArrayList<>(statements);
             tail = processBlock(genericNodes, tail);
@@ -109,7 +114,7 @@ public class JavaGraphManager {
                 Node elseBodyTail = processBlock(getStatementAsList(elseStmt), elseNode);
                 elseBodyTail.addNeighbor(joinNode);
 
-                currIf = null; 
+                currIf = null;
                 break;
             }
         }
@@ -335,46 +340,38 @@ public class JavaGraphManager {
      */
     public String concatenateFileContent(Node graph1Start, Node graph2Start) {
         StringBuilder concatenated = new StringBuilder();
-        Set<Node> visited1 = new HashSet<>();
-        Set<Node> visited2 = new HashSet<>();
+        List<Node> executionPath = new ArrayList<>();
+        Set<Node> visited = new HashSet<>();
 
-        // Collect execution paths from both graphs
-        List<Node> path1 = new ArrayList<>();
-        List<Node> path2 = new ArrayList<>();
+        // Collect the primary path from the first graph
+        collectExecutionPath(graph1Start, executionPath, visited);
 
-        collectExecutionPath(graph1Start, path1, visited1);
-        collectExecutionPath(graph2Start, path2, visited2);
-
-        // Group nodes by file and line number
-        java.util.Map<String, java.util.Map<Integer, Node>> fileLineMap = new java.util.HashMap<>();
-
-        for (Node node : path1) {
-            addNodeToFileLineMap(node, fileLineMap);
-        }
-        for (Node node : path2) {
-            addNodeToFileLineMap(node, fileLineMap);
+        // If the second graph was not reachable from the first (not linked), append it
+        if (graph2Start != null && !visited.contains(graph2Start)) {
+            collectExecutionPath(graph2Start, executionPath, visited);
         }
 
-        // Build concatenated content organized by file
-        for (String filePath : fileLineMap.keySet()) {
-            concatenated.append("// --- ").append(filePath).append(" ---\n");
+        int currentIndent = 0;
+        for (Node node : executionPath) {
+            String sourceLine = readSourceLine(node.getTargetFilePath(), node.getLineNumber());
 
-            java.util.Map<Integer, Node> lineMap = fileLineMap.get(filePath);
-            List<Integer> sortedLines = new ArrayList<>(lineMap.keySet());
-            java.util.Collections.sort(sortedLines);
+            if (sourceLine != null && !sourceLine.trim().isEmpty()) {
+                // Adjust indentation for blocks/methods
+                if (node.getNodeType() == NodeType.JOIN) {
+                    currentIndent = Math.max(0, currentIndent - 1);
+                }
 
-            for (Integer lineNumber : sortedLines) {
-                Node node = lineMap.get(lineNumber);
-                String sourceLine = readSourceLine(filePath, lineNumber);
+                concatenated.append("    ".repeat(currentIndent))
+                        .append(sourceLine.trim())
+                        .append("\n");
 
-                if (sourceLine != null && !sourceLine.trim().isEmpty()) {
-                    concatenated.append(String.format("[L%d:%s] %s\n",
-                        lineNumber,
-                        node.getNodeType().name(),
-                        sourceLine.trim()));
+                // Increase indentation after entering a block or function
+                if (node.getNodeType() == NodeType.FUNCTION_START ||
+                        node.getNodeType() == NodeType.CLASS ||
+                        node.getNodeType() == NodeType.IF) {
+                    currentIndent++;
                 }
             }
-            concatenated.append("\n");
         }
 
         return concatenated.toString();
@@ -390,7 +387,7 @@ public class JavaGraphManager {
         visited.add(current);
         path.add(current);
 
-        // Follow the first neighbor if available
+        // Follow the primary execution path (first neighbor)
         if (!current.getNeighbors().isEmpty()) {
             collectExecutionPath(current.getNeighbors().get(0), path, visited);
         }
@@ -416,19 +413,25 @@ public class JavaGraphManager {
      * Returns null if the file cannot be read or line doesn't exist.
      */
     private String readSourceLine(String filePath, int lineNumber) {
+        // Check cache first (for tests or memory-based processing)
+        if (fileContentCache.containsKey(filePath)) {
+            List<String> lines = fileContentCache.get(filePath);
+            if (lineNumber > 0 && lineNumber <= lines.size()) {
+                return lines.get(lineNumber - 1);
+            }
+            return null;
+        }
+
+        // Fallback to disk
         try {
             java.nio.file.Path path = java.nio.file.Paths.get(filePath);
-            if (!java.nio.file.Files.exists(path)) {
-                // File doesn't exist, return a placeholder
-                return null;
-            }
+            if (!java.nio.file.Files.exists(path)) return null;
 
             List<String> lines = java.nio.file.Files.readAllLines(path);
             if (lineNumber > 0 && lineNumber <= lines.size()) {
                 return lines.get(lineNumber - 1);
             }
         } catch (Exception e) {
-            // If file reading fails, return null
             return null;
         }
         return null;
